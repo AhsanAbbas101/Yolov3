@@ -17,15 +17,25 @@ def unique(tensor):
     return tensor_res
 
 
-def bbox_iou(box1, box2):
+def bbox_iou(box1, box2, x1y1x2y2):
     """
     Returns the IoU of two bounding boxes 
     
     
     """
-    #Get the coordinates of bounding boxes
-    b1_x1, b1_y1, b1_x2, b1_y2 = box1[:,0], box1[:,1], box1[:,2], box1[:,3]
-    b2_x1, b2_y1, b2_x2, b2_y2 = box2[:,0], box2[:,1], box2[:,2], box2[:,3]
+    
+    if x1y1x2y2:
+        b1_x1, b1_y1, b1_x2, b1_y2 = box1[:, 0], box1[:, 1], box1[:, 2], box1[:, 3]
+        b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
+    else:
+        # convert center to exact coordinates
+        b1_x1, b1_x2 = box1[:, 0] - box1[:, 2] / 2, box1[:, 0] + box1[:, 2] / 2
+        b1_y1, b1_y2 = box1[:, 1] - box1[:, 3] / 2, box1[:, 1] + box1[:, 3] / 2
+        b2_x1, b2_x2 = box2[:, 0] - box2[:, 2] / 2, box2[:, 0] + box2[:, 2] / 2
+        b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
+    
+    #b1_x1, b1_y1, b1_x2, b1_y2 = box2[:,0], box2[:, 1], box1[:,0], box1[:,1]
+    #b2_x1, b2_y1, b2_x2, b2_y2 = box2[:,0], box2[:,1], box2[:,2], box2[:,3]
     
     #get the corrdinates of the intersection rectangle
     inter_rect_x1 =  torch.max(b1_x1, b2_x1)
@@ -250,8 +260,8 @@ def load_classes(namesfile):
     return names
 
 
-predictions = torch.rand(1, 255, 13, 13 )
-print(predictions.size())
+#predictions = torch.rand(1, 255, 13, 13 )
+#print(predictions.size())
 #print(predictions)
-predictions = predict_transform(predictions, 416, [(10,13),(16,30),(33,23)], 80,False)
-putput = write_results(predictions, 0.65, 80, 0.4)
+#predictions = predict_transform(predictions, 416, [(10,13),(16,30),(33,23)], 80,False)
+#putput = write_results(predictions, 0.65, 80, 0.4)

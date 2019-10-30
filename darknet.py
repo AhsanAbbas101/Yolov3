@@ -11,6 +11,7 @@ Created on Fri Oct 25 10:05:42 2019
 
 import torch
 import torch.nn as nn
+from util import bbox_iou
 
 #from torchsummary import summary
 
@@ -69,6 +70,8 @@ class YOLOLayer(nn.Module):
         prediction = x
         #self.inp_dim = img_dim
         
+        #[1, 255 , 52 ,52 ]
+        
         batch_size = prediction.size(0)
         stride =  self.inp_dim // prediction.size(2)
         grid_size = self.inp_dim // stride
@@ -76,67 +79,139 @@ class YOLOLayer(nn.Module):
         num_anchors = len(self.anchors)
         
         # Reshape Output
-        prediction = prediction.view(batch_size, bbox_attrs*num_anchors, grid_size*grid_size)
-        prediction = prediction.transpose(1,2).contiguous()
-        prediction = prediction.view(batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
+        prediction = (
+                prediction.view(batch_size, num_anchors, bbox_attrs, grid_size, grid_size) #  [ 1, 3, 52, 52 , 85]
+                .permute(0,1,3,4,2)
+                .contiguous()
+                )
         
         #Sigmoid the  centre_X, centre_Y, object confidencce and class pred.
+        x = torch.sigmoid(prediction[..., 0])
+        y = torch.sigmoid(prediction[..., 1])
+        w = prediction[..., 2]
+        h = prediction[..., 3]
+        pred_conf = torch.sigmoid(prediction[..., 4])
+        pred_cls = torch.sigmoid(prediction[..., 5:])
+        
+        
+        #prediction = prediction.view(batch_size, bbox_attrs*num_anchors, grid_size*grid_size)
+        #prediction = prediction.transpose(1,2).contiguous()
+        #prediction = prediction.view(batch_size, grid_size*grid_size*num_anchors, bbox_attrs)
+        
+        
         # 0 - CenterX , 1 - CenterY , 2 - Height, 3 - Width , 4 - confidence , 5... class pred
-        prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
-        prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
-        prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
-        prediction[:,:,5: 5 + self.num_classes] = torch.sigmoid((prediction[:,:, 5 : 5 + self.num_classes]))
+        #prediction[:,:,0] = torch.sigmoid(prediction[:,:,0])
+        #prediction[:,:,1] = torch.sigmoid(prediction[:,:,1])
+        #prediction[:,:,4] = torch.sigmoid(prediction[:,:,4])
+        #prediction[:,:,5: 5 + self.num_classes] = torch.sigmoid((prediction[:,:, 5 : 5 + self.num_classes]))
         
         if grid_size != self.grid_size:
             self.compute_grid_offsets(grid_size,CUDA=x.is_cuda)
         
         # Add Offset and scale with anchors
-        prediction[:,:,:2] += self.x_y_offset
-        prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*self.scaled_anchors
-        prediction[:,:,:4] *= self.stride
+        pred_boxes = torch.FloatTensor(prediction[..., :4].shape)
+        pred_boxes[..., 0] = x.data + self.x_offset
+        pred_boxes[..., 1] = y.data + self.y_offset
+        pred_boxes[..., 2] = torch.exp(w.data)* self.anchor_w
+        pred_boxes[..., 3] = torch.exp(h.data)* self.anchor_h
         
+        #prediction[:,:,:2] += self.x_y_offset
+        #prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*self.scaled_anchors
+        #prediction[:,:,:4] *= self.stride
+        output = torch.cat(
+                (
+                    pred_boxes.view(batch_size, -1, 4) * stride,
+                    pred_conf.view(batch_size, -1, 1),
+                    pred_cls.view(batch_size, -1 , self.num_classes),
+                ),
+                -1,
+                
+        )
         
         if target is None:
-            return prediction
+            return output, 0
         else:
             # Function Call
             
             #Convert to position relative to box
-            target_boxes = target[:,2:6] * grid_size
+            #target_boxes = target[:,2:6] * grid_size
+            
+            # [1,6]
+            target_boxes = target[:,2:6]
             gxy = target_boxes[:, :2]
             gwh = target_boxes[:, 2:]
             
+            
+            
             # Get anchors with best IOU
-            ious = torch.stack([ fuction_iou(anchor, gwh) for anchor in anchors ])
+            #print(grid_size)
+            #print(self.anchors)
+            #print(target_boxes.tolist())
+            #print(torch.FloatTensor(self.anchors).size())
+            #print(torch.FloatTensor(self.anchors).unsqueeze(0).size())
+            #print(target_boxes.size())
+            
+            #x = [ print(torch.FloatTensor(anchor), target_boxes) for anchor in self.anchors ]
+            #print(x)
+            #for anchor in self.anchors:
+            #    print (torch.FloatTensor(anchor))
+            # Get anchors with best IOU
+            ious = torch.stack([ bbox_iou(torch.FloatTensor(anchor).unsqueeze(0), gwh , False) for anchor in self.anchors ])
             best_ious , best_n = ious.max(0)
             
             # Separate target_labels
             b, target_labels = target[:, :2].long().t()
-            gx , gy = gxy.t()
-            gw , gh = gwh.t() 
-            gi , gj = gxy.long().t()
+            gx , gy = gxy.t() # not scaled
+            gw , gh = gwh.t() # not scaled
+            gi , gj = gxy.long().t()% grid_size
+            
+            
+            ByteTensor = torch.cuda.ByteTensor if prediction.is_cuda else torch.ByteTensor
+            FloatTensor = torch.cuda.FloatTensor if prediction.is_cuda else torch.FloatTensor
             
             # Set masks 
+            obj_mask = ByteTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            noobj_mask = ByteTensor(batch_size, num_anchors, grid_size, grid_size).fill_(1)
+
+
+            #print (b, best_n, gj.size(), gi.size())
+
             obj_mask[b, best_n, gj , gi] = 1
             noobj_mask[b, best_n, gj , gi] = 0
             
+            
             # Set noobj mask to zero where iou exceeds ignore threshold
             for i, anchor in enumerate(ious.t()):
-                noobj_mask[b[i], anchor> ignore_thres , gj[i], gi[i]] = 0
-                
+                noobj_mask[b[i], anchor> self.ignore_threshold , gj[i], gi[i]] = 0
+            
+            tx =  FloatTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            ty =  FloatTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            tw =  FloatTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            th =  FloatTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            class_mask =  FloatTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            #iou_scores =  FloatTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            tcls =  FloatTensor(batch_size, num_anchors, grid_size, grid_size, self.num_classes).fill_(0)
+            
             # Coordinates
             tx[b, best_n, gj, gi] = gx - gx.floor()
             ty[b, best_n, gj, gi] = gy - gy.floor()
             # Width and Height
-            tw[b, best_n, gj, gi] = torch.log(gw/ anchors[best_n][:, 0] + 1e-16)
-            th[b, best_n, gj, gi] = torch.log(gh/ anchors[best_n][:, 1] + 1e-16)
-            # One Hot encoding of label
-            tcls[b. best_n. gj, gi, target_labels] = 1
             
+            #print (self.scaled_anchors.size())
+            #self.scaled_anchors = [(a[0]/self.stride, a[1]/self.stride) for a in self.anchors]
+            #self.scaled_anchors = torch.FloatTensor(self.scaled_anchors)
+            
+            tw[b, best_n, gj, gi] = torch.log(gw/ self.scaled_anchors[best_n][:, 0] + 1e-16)
+            th[b, best_n, gj, gi] = torch.log(gh/ self.scaled_anchors[best_n][:, 1] + 1e-16)
+            # One Hot encoding of label
+            tcls[b, best_n, gj, gi, target_labels] = 1
+            
+            #print(target_labels.size())
+            #print(prediction[:,:,5:5+self.num_classes].argmax(-1))
             
             # Compute labels correctness and iou at best anchor
-            class_mask[b, best_n, gj, gi] = (prediction[:,:,5:5+self.num_classes].argmax(-1) == target_labels).float()
-            iou_scores[b, best_n, gj, gi] = fuction_iou(prediction[:,:,:4, ], target_boxes) # --- Masla
+            class_mask[b, best_n, gj, gi] = (pred_cls[b, best_n, gj, gi].argmax(-1) == target_labels).float()
+            #iou_scores[b, best_n, gj, gi] = bbox_iou(prediction[:,:,:4, ], target_boxes) # --- Masla
             
             tconf = obj_mask.float()
             
@@ -144,17 +219,24 @@ class YOLOLayer(nn.Module):
             # Compute Loss
             MSEloss = nn.MSELoss()
             BCEloss = nn.BCELoss()
-            loss_x = MSEloss( prediction[:,:,0][obj_mask] , tx[obj_mask])
-            loss_y = MSEloss( prediction[:,:,1][obj_mask] , ty[obj_mask])
-            loss_w = MSEloss( prediction[:,:,2][obj_mask] , tw[obj_mask])
-            loss_h = MSEloss( prediction[:,:,3][obj_mask] , th[obj_mask])
-            loss_conf_obj = BCEloss( prediction[:,:,4][obj_mask] , tconf[obj_mask])
-            loss_conf_noobj = BCEloss( prediction[:,:,4][noobj_mask] , tconf[noobj_mask])
+            
+            #print("OBject Mask")
+            #print(obj_mask.size())
+            #prediction.view(batch_size)
+            #print("Prediction: ",prediction[:,:,0][obj_mask].size())
+            #print("tx ", tx[obj_mask].size())
+            
+            loss_x = MSEloss( x[obj_mask] , tx[obj_mask])
+            loss_y = MSEloss( y[obj_mask] , ty[obj_mask])
+            loss_w = MSEloss( w[obj_mask] , tw[obj_mask])
+            loss_h = MSEloss( h[obj_mask] , th[obj_mask])
+            loss_conf_obj = BCEloss( pred_conf[obj_mask] , tconf[obj_mask])
+            loss_conf_noobj = BCEloss( pred_conf[noobj_mask] , tconf[noobj_mask])
             loss_conf = self.obj_scale * loss_conf_obj + self.noobj_scale * loss_conf_noobj
-            loss_cls = BCEloss( prediction[:,:,5:5+self.num_classes][obj_mask], tcls[obj_mask])
+            loss_cls = BCEloss( pred_cls[obj_mask], tcls[obj_mask])
             total_loss = loss_x + loss_y + loss_w + loss_h + loss_conf + loss_cls
         
-            return prediction, total_loss
+            return output, total_loss
 
     def compute_grid_offsets(self, grid_size, CUDA=True):
         """
@@ -163,22 +245,18 @@ class YOLOLayer(nn.Module):
         """
         self.grid_size = grid_size
         self.stride = self.inp_dim // self.grid_size
-        
-        grid = np.arange(grid_size)
-        a,b = np.meshgrid(grid, grid)
 
-        x_offset = torch.FloatTensor(a).view(-1,1)
-        y_offset = torch.FloatTensor(b).view(-1,1)
+        self.x_offset = torch.arange(grid_size).repeat(grid_size, 1).view([1,1,grid_size,grid_size]).type(torch.FloatTensor)
+        self.y_offset = torch.arange(grid_size).repeat(grid_size, 1).t().view([1,1,grid_size,grid_size]).type(torch.FloatTensor)
         
         if CUDA:
-            x_offset = x_offset.cuda()
-            y_offset = y_offset.cuda()
-
-        self.x_y_offset = torch.cat((x_offset, y_offset), 1).repeat(1,len(self.anchors)).view(-1,2).unsqueeze(0)
+            self.x_offset = self.x_offset.cuda()
+            self.y_offset = self.y_offset.cuda()
         
-        self.scaled_anchors = [(a[0]/self.stride, a[1]/self.stride) for a in self.anchors]
-        self.scaled_anchors = torch.FloatTensor(self.scaled_anchors)
-        self.scaled_anchors = self.scaled_anchors.repeat(grid_size*grid_size, 1).unsqueeze(0)
+        self.scaled_anchors = torch.FloatTensor([(a[0]/self.stride, a[1]/self.stride) for a in self.anchors])
+
+        self.anchor_w = self.scaled_anchors[:, 0:1].view((1, len(self.anchors), 1, 1))
+        self.anchor_h = self.scaled_anchors[:, 1:2].view((1, len(self.anchors), 1, 1))
         
         if CUDA:
             self.scaled_anchors = self.scaled_anchors.cuda()
@@ -190,7 +268,7 @@ class DarkNet(nn.Module):
     
     
     
-    def __init__(self):
+    def __init__(self, target=None):
         super().__init__()
         
         self.inp_dim = 416
@@ -201,6 +279,9 @@ class DarkNet(nn.Module):
         self.anchors_big = [(116,90),(156,198),(373,326)]
         self.anchors_medium = [(30,61),(62,45),(59,119)]
         self.anchors_small = [(10,13),(16,30),(33,23)]
+        
+        self.target = target
+        
         # Create DarkNet Modules 
         
         # Residual Block
@@ -264,10 +345,12 @@ class DarkNet(nn.Module):
         self.yolo_big = nn.Sequential(
                 nn.Conv2d(in_channels=1024, out_channels=(self.nBoxes*(5+self.num_classes)), kernel_size=1, stride=1 , padding=(1-1)//2),
                 # Activation - Linear
-                nn.ReLU(inplace=True),
-                # Detector
-                YOLOLayer(self.inp_dim, self.anchors_big , self.num_classes , self.CUDA)
+                nn.ReLU(inplace=True)
+                
+                
                 )
+        # Detector
+        self.yolo_big_detector = YOLOLayer(self.inp_dim, self.anchors_big , self.num_classes , self.CUDA)
         
         # yolo medium scale
         self.block_G = nn.Sequential(
@@ -289,11 +372,11 @@ class DarkNet(nn.Module):
         self.yolo_medium = nn.Sequential(
                 nn.Conv2d(in_channels=512, out_channels=(self.nBoxes*(5+self.num_classes)), kernel_size=1, stride=1 , padding=(1-1)//2),
                 # Activation - Linear
-                nn.ReLU(inplace=True),
+                nn.ReLU(inplace=True)
                 # Detector
-                YOLOLayer(self.inp_dim, self.anchors_medium , self.num_classes , self.CUDA)
+                
                 )
-        
+        self.yolo_medium_detector = YOLOLayer(self.inp_dim, self.anchors_medium , self.num_classes , self.CUDA)
         
         # yolo small scale
         self.block_I = nn.Sequential(
@@ -313,12 +396,11 @@ class DarkNet(nn.Module):
                 
                 nn.Conv2d(in_channels=256, out_channels=(self.nBoxes*(5+self.num_classes)), kernel_size=1, stride=1 , padding=(1-1)//2),
                 # Activation - Linear
-                nn.ReLU(inplace=True),
-                #Detector
-                YOLOLayer(self.inp_dim, self.anchors_small , self.num_classes , self.CUDA)
+                nn.ReLU(inplace=True)
+                
                 )
-        
-        
+        #Detector
+        self.yolo_small_detector = YOLOLayer(self.inp_dim, self.anchors_small , self.num_classes , self.CUDA)
         
         
     def forward(self,x):
@@ -337,6 +419,7 @@ class DarkNet(nn.Module):
         
         # yolo_big
         x_big = self.yolo_big(x_f)
+        x_big, loss_1 = self.yolo_big_detector(x_big, self.target)
         
         #x_big = x_big.data
         #x_big = predict_transform(x_big, self.inp_dim, self.anchors_big , self.num_classes, self.CUDA)
@@ -354,6 +437,7 @@ class DarkNet(nn.Module):
         
         # yolo_med
         x_med = self.yolo_medium(x_h)
+        x_med, loss_2 = self.yolo_medium_detector(x_med, self.target)
         
         #x_med = x_med.data
         #x_med = predict_transform(x_med, self.inp_dim, self.anchors_medium, self.num_classes, self.CUDA)
@@ -366,17 +450,29 @@ class DarkNet(nn.Module):
 
         # yolo_small
         x_small = self.yolo_small(x)
-        
+        x_small, loss_3 = self.yolo_small_detector(x_small, self.target)
         #x_small = x_small.data
         #x_small = predict_transform(x_small, self.inp_dim, self.anchors_small, self.num_classes, self.CUDA)
         
         
         #return torch.cat((x_big.data,x_med.data,x_small.data),1)
-        return x   
+        return torch.cat((x_big.data,x_med.data,x_small.data),1) , (loss_1+loss_2+loss_3)
 
 # Yolov3 - Darknet-53 - Architecture
 
-#model = DarkNet()
+x = torch.rand(1,3,416,416)
+x *= 255
+target = torch.zeros(1,6)
+print(target.size())
+target[0,0] = 0
+target[0,2] = 333
+target[0,3] = 72
+target[0,4] = 425
+target[0,5] = 158
+target[0,1] = 0
+print(target)
+model = DarkNet(target)
+model.forward(x)
 #summary(model, (3,416,416))
 
 
