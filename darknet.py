@@ -51,7 +51,7 @@ class ResidualBlock(nn.Module):
 
 class YOLOLayer(nn.Module):
     
-    def __init__(self,inp_dim, anchors, num_classes, CUDA = True):
+    def __init__(self,inp_dim, anchors, num_classes, device = 'cpu'):
         super().__init__()
         
         
@@ -63,14 +63,16 @@ class YOLOLayer(nn.Module):
         self.obj_scale = 1
         self.noobj_scale = 100
         self.grid_size = 0
+        self.device = device
         
         
     def forward(self, x , target=None, img_dim = None):
         
         prediction = x
         #self.inp_dim = img_dim
-        
         #[1, 255 , 52 ,52 ]
+        ByteTensor = torch.cuda.ByteTensor if prediction.is_cuda else torch.ByteTensor
+        FloatTensor = torch.cuda.FloatTensor if prediction.is_cuda else torch.FloatTensor
         
         batch_size = prediction.size(0)
         stride =  self.inp_dim // prediction.size(2)
@@ -106,10 +108,10 @@ class YOLOLayer(nn.Module):
         #prediction[:,:,5: 5 + self.num_classes] = torch.sigmoid((prediction[:,:, 5 : 5 + self.num_classes]))
         
         if grid_size != self.grid_size:
-            self.compute_grid_offsets(grid_size,CUDA=x.is_cuda)
+            self.compute_grid_offsets(grid_size,CUDA=prediction.is_cuda)
         
         # Add Offset and scale with anchors
-        pred_boxes = torch.FloatTensor(prediction[..., :4].shape)
+        pred_boxes = FloatTensor(prediction[..., :4].shape)
         pred_boxes[..., 0] = x.data + self.x_offset
         pred_boxes[..., 1] = y.data + self.y_offset
         pred_boxes[..., 2] = torch.exp(w.data)* self.anchor_w
@@ -118,6 +120,8 @@ class YOLOLayer(nn.Module):
         #prediction[:,:,:2] += self.x_y_offset
         #prediction[:,:,2:4] = torch.exp(prediction[:,:,2:4])*self.scaled_anchors
         #prediction[:,:,:4] *= self.stride
+        
+        # TODO see device
         output = torch.cat(
                 (
                     pred_boxes.view(batch_size, -1, 4) * stride,
@@ -132,7 +136,7 @@ class YOLOLayer(nn.Module):
             return output, 0
         else:
             # Function Call
-            
+          
             #Convert to position relative to box
             #target_boxes = target[:,2:6] * grid_size
             
@@ -156,7 +160,8 @@ class YOLOLayer(nn.Module):
             #for anchor in self.anchors:
             #    print (torch.FloatTensor(anchor))
             # Get anchors with best IOU
-            ious = torch.stack([ bbox_iou(torch.FloatTensor(anchor).unsqueeze(0), gwh , False) for anchor in self.anchors ])
+            
+            ious = torch.stack([ bbox_iou(FloatTensor(anchor).unsqueeze(0), gwh , False) for anchor in self.anchors ])
             best_ious , best_n = ious.max(0)
             
             # Separate target_labels
@@ -166,8 +171,6 @@ class YOLOLayer(nn.Module):
             gi , gj = gxy.long().t()% grid_size
             
             
-            ByteTensor = torch.cuda.ByteTensor if prediction.is_cuda else torch.ByteTensor
-            FloatTensor = torch.cuda.FloatTensor if prediction.is_cuda else torch.FloatTensor
             
             # Set masks 
             obj_mask = ByteTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
@@ -246,23 +249,19 @@ class YOLOLayer(nn.Module):
         self.grid_size = grid_size
         self.stride = self.inp_dim // self.grid_size
 
-        self.x_offset = torch.arange(grid_size).repeat(grid_size, 1).view([1,1,grid_size,grid_size]).type(torch.FloatTensor)
-        self.y_offset = torch.arange(grid_size).repeat(grid_size, 1).t().view([1,1,grid_size,grid_size]).type(torch.FloatTensor)
+        FloatTensor = torch.cuda.FloatTensor if CUDA else torch.FloatTensor
+
+
+        self.x_offset = torch.arange(grid_size).repeat(grid_size, 1).view([1,1,grid_size,grid_size]).type(FloatTensor)
+        self.y_offset = torch.arange(grid_size).repeat(grid_size, 1).t().view([1,1,grid_size,grid_size]).type(FloatTensor)
         
-        if CUDA:
-            self.x_offset = self.x_offset.cuda()
-            self.y_offset = self.y_offset.cuda()
         
-        self.scaled_anchors = torch.FloatTensor([(a[0]/self.stride, a[1]/self.stride) for a in self.anchors])
+        self.scaled_anchors = FloatTensor([(a[0]/self.stride, a[1]/self.stride) for a in self.anchors])
 
         self.anchor_w = self.scaled_anchors[:, 0:1].view((1, len(self.anchors), 1, 1))
         self.anchor_h = self.scaled_anchors[:, 1:2].view((1, len(self.anchors), 1, 1))
         
-        if CUDA:
-            self.scaled_anchors = self.scaled_anchors.cuda()
-            
-            
-        
+
 
 class DarkNet(nn.Module):
     
@@ -274,7 +273,7 @@ class DarkNet(nn.Module):
         self.inp_dim = 416
         self.num_classes = 80
         self.nBoxes = 3
-        self.CUDA = False
+        
         
         self.anchors_big = [(116,90),(156,198),(373,326)]
         self.anchors_medium = [(30,61),(62,45),(59,119)]
@@ -350,7 +349,7 @@ class DarkNet(nn.Module):
                 
                 )
         # Detector
-        self.yolo_big_detector = YOLOLayer(self.inp_dim, self.anchors_big , self.num_classes , self.CUDA)
+        self.yolo_big_detector = YOLOLayer(self.inp_dim, self.anchors_big , self.num_classes )
         
         # yolo medium scale
         self.block_G = nn.Sequential(
@@ -376,7 +375,7 @@ class DarkNet(nn.Module):
                 # Detector
                 
                 )
-        self.yolo_medium_detector = YOLOLayer(self.inp_dim, self.anchors_medium , self.num_classes , self.CUDA)
+        self.yolo_medium_detector = YOLOLayer(self.inp_dim, self.anchors_medium , self.num_classes )
         
         # yolo small scale
         self.block_I = nn.Sequential(
@@ -400,7 +399,7 @@ class DarkNet(nn.Module):
                 
                 )
         #Detector
-        self.yolo_small_detector = YOLOLayer(self.inp_dim, self.anchors_small , self.num_classes , self.CUDA)
+        self.yolo_small_detector = YOLOLayer(self.inp_dim, self.anchors_small , self.num_classes)
         
         
     def forward(self,x):
@@ -431,7 +430,7 @@ class DarkNet(nn.Module):
         # Concat E1 - G
         x = torch.cat((x_e_1,x),1)
         
-        print(x.size())
+        #print(x.size())
         
         x_h = self.block_H(x)
         
@@ -459,7 +458,7 @@ class DarkNet(nn.Module):
         return torch.cat((x_big.data,x_med.data,x_small.data),1) , (loss_1+loss_2+loss_3)
 
 # Yolov3 - Darknet-53 - Architecture
-
+"""
 x = torch.rand(1,3,416,416)
 x *= 255
 target = torch.zeros(1,6)
@@ -474,7 +473,7 @@ print(target)
 model = DarkNet(target)
 model.forward(x)
 #summary(model, (3,416,416))
-
+"""
 
 
 

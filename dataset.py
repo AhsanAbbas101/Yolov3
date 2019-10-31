@@ -43,7 +43,7 @@ class IIITDataset(Dataset):
         if torch.is_tensor(idx):
             idx = idx.tolist()
 
-        print(self.data_frame['filename'][idx])
+        #print(self.data_frame['filename'][idx])
 
         img_name = os.path.join(self.root_dir,
                                 self.data_frame.iloc[idx, 0])
@@ -68,7 +68,7 @@ class IIITDataset(Dataset):
         if self.transform:
             sample = self.transform(sample)
 
-        return self.transform_v2(img), torch.Tensor(properties)
+        return self.transform_v2(img), self.transform_v2(properties)
         #return self.transform_v2(image_resized) , self.transform_v2(properties)
     
 
