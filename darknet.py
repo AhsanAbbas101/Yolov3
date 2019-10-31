@@ -41,8 +41,8 @@ class ResidualBlock(nn.Module):
         residual = x
         #if self.should_apply_shortcut: residual = self.shortcut(x)
         x = self.blocks(x)
-        x += residual
-        x = self.activate(x)
+        #x += residual
+        x = self.activate(x+residual)
         return x
     
     @property
@@ -141,10 +141,16 @@ class YOLOLayer(nn.Module):
             #target_boxes = target[:,2:6] * grid_size
             
             # [1,6]
-            target_boxes = target[:,2:6]
+            #print(target)
+            target_boxes = target[:,2:]
+            #print(target_boxes[0])
+            #print("Target_boxes: ",target_boxes.size())
             gxy = target_boxes[:, :2]
             gwh = target_boxes[:, 2:]
             
+            #print(gwh.size())
+            #print("Anchor_0: ", FloatTensor(self.anchors)[0].size()) 
+            #print(FloatTensor(self.anchors)[0].unsqueeze(0)[:,0])
             
             
             # Get anchors with best IOU
@@ -161,11 +167,15 @@ class YOLOLayer(nn.Module):
             #    print (torch.FloatTensor(anchor))
             # Get anchors with best IOU
             
-            ious = torch.stack([ bbox_iou(FloatTensor(anchor).unsqueeze(0), gwh , False) for anchor in self.anchors ])
+            ious = torch.stack([ bbox_iou(FloatTensor(anchor).unsqueeze(0), target_boxes , True) for anchor in self.anchors ])
+            print(ious.size())
             best_ious , best_n = ious.max(0)
             
             # Separate target_labels
             b, target_labels = target[:, :2].long().t()
+            print("b ", b)
+            print(target_labels.size())
+            print(target_labels)
             gx , gy = gxy.t() # not scaled
             gw , gh = gwh.t() # not scaled
             gi , gj = gxy.long().t()% grid_size
@@ -213,7 +223,7 @@ class YOLOLayer(nn.Module):
             #print(prediction[:,:,5:5+self.num_classes].argmax(-1))
             
             # Compute labels correctness and iou at best anchor
-            class_mask[b, best_n, gj, gi] = (pred_cls[b, best_n, gj, gi].argmax(-1) == target_labels).float()
+            #class_mask[b, best_n, gj, gi] = (pred_cls[b, best_n, gj, gi].argmax(-1) == target_labels).float()
             #iou_scores[b, best_n, gj, gi] = bbox_iou(prediction[:,:,:4, ], target_boxes) # --- Masla
             
             tconf = obj_mask.float()
@@ -271,7 +281,7 @@ class DarkNet(nn.Module):
         super().__init__()
         
         self.inp_dim = 416
-        self.num_classes = 80
+        self.num_classes = 2
         self.nBoxes = 3
         
         

@@ -55,7 +55,7 @@ class IIITDataset(Dataset):
          #              anti_aliasing=True)
         
         # Bounding Box Tensor
-        properties = self.data_frame.iloc[idx, [4, 8, 9, 10, 11]]
+        properties = self.data_frame.iloc[idx, [4,7, 8, 9, 10, 11]]
         #properties = properties.astype(np.float64)
         #img = torch.from_numpy(img.transpose(2, 0, 1))
         #properties = self.data_frame.iloc[idx, 1:]
@@ -68,7 +68,7 @@ class IIITDataset(Dataset):
         if self.transform:
             sample = self.transform(sample)
 
-        return self.transform_v2(img), self.transform_v2(properties)
+        return self.transform_v2(img), torch.Tensor(properties)
         #return self.transform_v2(image_resized) , self.transform_v2(properties)
     
 

@@ -46,11 +46,20 @@ def parseXML(xmlfile):
     item['truncated'] = root.find('./object/truncated').text
     item['occluded'] = root.find('./object/occluded').text
     
-    item['xmin'] = root.find('./object/bndbox/xmin').text
-    item['ymin'] = root.find('./object/bndbox/ymin').text
-    item['xmax'] = root.find('./object/bndbox/xmax').text
-    item['ymax'] = root.find('./object/bndbox/ymax').text
+    xmin = int(root.find('./object/bndbox/xmin').text)
+    ymin = int(root.find('./object/bndbox/ymin').text)
+    xmax = int(root.find('./object/bndbox/xmax').text)
+    ymax = int(root.find('./object/bndbox/ymax').text)
     
+    centreX = (xmax + xmin)/2
+    centreY = (ymax + ymin)/2
+    w = xmax - xmin
+    h = ymax - ymin
+    
+    item['x'] = centreX
+    item['y'] = centreY
+    item['w'] = w
+    item['h'] = h
     
     item['difficult'] = root.find('./object/difficult').text
     
@@ -83,7 +92,7 @@ def parseXML(xmlfile):
 def savetoCSV(newsitems, filename): 
   
     # specifying the fields for csv file 
-    fields = ['filename', 'width', 'height', 'depth', 'name', 'pose', 'truncated', 'occluded', 'xmin', 'ymin', 'xmax', 'ymax', 'difficult'] 
+    fields = ['filename', 'width', 'height', 'depth', 'name', 'pose', 'truncated', 'occluded', 'x', 'y', 'w', 'h', 'difficult'] 
   
     # writing to csv file 
     with open(filename, 'w', newline='') as csvfile: 

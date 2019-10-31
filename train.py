@@ -19,7 +19,7 @@ from darknet import DarkNet
 
 #torch.set_default_tensor_type('torch.cuda.FloatTensor')
 
-dataset_trainset = IIITDataset(csv_file="annotations.csv", root_dir="data/images/")
+dataset_trainset = IIITDataset(csv_file="annotations.csv", root_dir="images/")
 #mnist_trainset = datasets.MNIST(root='./data', train=True, download=True, transform = transforms.ToTensor())
 #mnist_testset = datasets.MNIST(root='./data', train=False, download=True, transform = transforms.ToTensor())
 
@@ -30,9 +30,8 @@ train_loader = DataLoader(dataset=dataset_trainset, batch_size=32, shuffle=False
 model = DarkNet()
 model = model.cuda()
 
-
-# optimizer = optim.Adam(model.parameters(), lr=0.0001)
-optimizer = optim.Adam(model.parameters())
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+#optimizer = optim.Adam(model.parameters())
 
 #print(list(enumerate(train_loader, 1)))
 
@@ -42,6 +41,7 @@ def train(epoch):
         input, target = Variable(batch[0]), Variable(batch[1])
         
         input = input.cuda()
+        target = target.cuda()
         model.target = target
         
         #DO forward_call
