@@ -23,20 +23,27 @@ def bbox_iou(box1, box2, x1y1x2y2):
     
     
     """
+    #print("box1 :", box1)
+    #print("box2 :", box2)
     
-    if x1y1x2y2: # (centrex, centrey , w, h)
+    if x1y1x2y2: # (xmin, ymin , xmax, ymax)
         b1_x1, b1_y1, b1_x2, b1_y2 = box2[:, 0], box2[:, 1], box1[:, 0], box1[:, 1]
         b2_x1, b2_y1, b2_x2, b2_y2 = box2[:, 0], box2[:, 1], box2[:, 2], box2[:, 3]
     else:
-        # convert center to exact coordinates
-        b1_x1, b1_x2 = box1[:, 0] - box1[:, 2] / 2, box1[:, 0] + box1[:, 2] / 2
-        b1_y1, b1_y2 = box1[:, 1] - box1[:, 3] / 2, box1[:, 1] + box1[:, 3] / 2
+        # convert center to exact coordinates ( x, y, w, h)
+        b1_x1, b1_x2 = box2[:, 0] - box1[:, 0] / 2, box2[:, 0] + box1[:, 0] / 2
+        b1_y1, b1_y2 = box2[:, 1] - box1[:, 1] / 2, box2[:, 1] + box1[:, 1] / 2
         b2_x1, b2_x2 = box2[:, 0] - box2[:, 2] / 2, box2[:, 0] + box2[:, 2] / 2
         b2_y1, b2_y2 = box2[:, 1] - box2[:, 3] / 2, box2[:, 1] + box2[:, 3] / 2
+    
+    #print( "(",b1_x1.item(),",",b1_y1.item(),") - (",b1_x2.item(),",",b1_y2.item(),")" )
+    #print( "(",b2_x1.item(),",",b2_y1.item(),") - (",b2_x2.item(),",",b2_y2.item(),")" )
     
     #b1_x1, b1_y1, b1_x2, b1_y2 = box2[:,0], box2[:, 1], box1[:,0], box1[:,1]
     #b2_x1, b2_y1, b2_x2, b2_y2 = box2[:,0], box2[:,1], box2[:,2], box2[:,3]
     
+    # Need xmin,ymin,xmax,ymax
+
     #get the corrdinates of the intersection rectangle
     inter_rect_x1 =  torch.max(b1_x1, b2_x1)
     inter_rect_y1 =  torch.max(b1_y1, b2_y1)
@@ -50,7 +57,7 @@ def bbox_iou(box1, box2, x1y1x2y2):
     b1_area = (b1_x2 - b1_x1 + 1)*(b1_y2 - b1_y1 + 1)
     b2_area = (b2_x2 - b2_x1 + 1)*(b2_y2 - b2_y1 + 1)
     
-    iou = inter_area / (b1_area + b2_area - inter_area)
+    iou = inter_area / b1_area + b2_area - inter_area
     
     return iou
 

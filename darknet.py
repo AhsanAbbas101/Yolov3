@@ -71,7 +71,7 @@ class YOLOLayer(nn.Module):
         prediction = x
         #self.inp_dim = img_dim
         #[1, 255 , 52 ,52 ]
-        ByteTensor = torch.cuda.ByteTensor if prediction.is_cuda else torch.ByteTensor
+        BoolTensor = torch.cuda.BoolTensor if prediction.is_cuda else torch.BoolTensor
         FloatTensor = torch.cuda.FloatTensor if prediction.is_cuda else torch.FloatTensor
         
         batch_size = prediction.size(0)
@@ -143,7 +143,6 @@ class YOLOLayer(nn.Module):
             # [1,6]
             #print(target)
             target_boxes = target[:,2:]
-            #print(target_boxes[0])
             #print("Target_boxes: ",target_boxes.size())
             gxy = target_boxes[:, :2]
             gwh = target_boxes[:, 2:]
@@ -166,16 +165,11 @@ class YOLOLayer(nn.Module):
             #for anchor in self.anchors:
             #    print (torch.FloatTensor(anchor))
             # Get anchors with best IOU
-            
-            ious = torch.stack([ bbox_iou(FloatTensor(anchor).unsqueeze(0), target_boxes , True) for anchor in self.anchors ])
-            print(ious.size())
+            ious = torch.stack([ bbox_iou(FloatTensor(anchor).unsqueeze(0), target_boxes , False) for anchor in self.anchors ])
             best_ious , best_n = ious.max(0)
             
             # Separate target_labels
             b, target_labels = target[:, :2].long().t()
-            print("b ", b)
-            print(target_labels.size())
-            print(target_labels)
             gx , gy = gxy.t() # not scaled
             gw , gh = gwh.t() # not scaled
             gi , gj = gxy.long().t()% grid_size
@@ -183,15 +177,15 @@ class YOLOLayer(nn.Module):
             
             
             # Set masks 
-            obj_mask = ByteTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
-            noobj_mask = ByteTensor(batch_size, num_anchors, grid_size, grid_size).fill_(1)
+            obj_mask = BoolTensor(batch_size, num_anchors, grid_size, grid_size).fill_(0)
+            noobj_mask = BoolTensor(batch_size, num_anchors, grid_size, grid_size).fill_(1)
 
 
             #print (b, best_n, gj.size(), gi.size())
 
             obj_mask[b, best_n, gj , gi] = 1
             noobj_mask[b, best_n, gj , gi] = 0
-            
+
             
             # Set noobj mask to zero where iou exceeds ignore threshold
             for i, anchor in enumerate(ious.t()):
@@ -206,9 +200,11 @@ class YOLOLayer(nn.Module):
             tcls =  FloatTensor(batch_size, num_anchors, grid_size, grid_size, self.num_classes).fill_(0)
             
             # Coordinates
+
             tx[b, best_n, gj, gi] = gx - gx.floor()
             ty[b, best_n, gj, gi] = gy - gy.floor()
             # Width and Height
+
             
             #print (self.scaled_anchors.size())
             #self.scaled_anchors = [(a[0]/self.stride, a[1]/self.stride) for a in self.anchors]
@@ -216,8 +212,12 @@ class YOLOLayer(nn.Module):
             
             tw[b, best_n, gj, gi] = torch.log(gw/ self.scaled_anchors[best_n][:, 0] + 1e-16)
             th[b, best_n, gj, gi] = torch.log(gh/ self.scaled_anchors[best_n][:, 1] + 1e-16)
+            
+
+            
             # One Hot encoding of label
             tcls[b, best_n, gj, gi, target_labels] = 1
+            
             
             #print(target_labels.size())
             #print(prediction[:,:,5:5+self.num_classes].argmax(-1))
@@ -227,8 +227,7 @@ class YOLOLayer(nn.Module):
             #iou_scores[b, best_n, gj, gi] = bbox_iou(prediction[:,:,:4, ], target_boxes) # --- Masla
             
             tconf = obj_mask.float()
-            
-            
+
             # Compute Loss
             MSEloss = nn.MSELoss()
             BCEloss = nn.BCELoss()
@@ -364,7 +363,7 @@ class DarkNet(nn.Module):
         # yolo medium scale
         self.block_G = nn.Sequential(
                 conv_block(in_f=1024, out_f=256, kernel_size=1, stride=1, padding=1 ),
-                nn.Upsample(scale_factor = 2, mode = "bilinear")
+                nn.Upsample(scale_factor = 2, mode = "bilinear", align_corners=True)
                 
                 )
         self.block_H = nn.Sequential(
@@ -390,7 +389,7 @@ class DarkNet(nn.Module):
         # yolo small scale
         self.block_I = nn.Sequential(
                 conv_block(in_f=512, out_f=128, kernel_size=1, stride=1, padding=1),
-                nn.Upsample(scale_factor = 2, mode = "bilinear")
+                nn.Upsample(scale_factor = 2, mode = "bilinear", align_corners=True)
                 )
         
         self.yolo_small = nn.Sequential(

@@ -56,6 +56,18 @@ class IIITDataset(Dataset):
         
         # Bounding Box Tensor
         properties = self.data_frame.iloc[idx, [4,7, 8, 9, 10, 11]]
+
+        # Resizing annotations to match image size
+        resized_x_ratio = 416/(float)(self.data_frame.at[idx, "width"])
+        resized_y_ratio = 416/(float)(self.data_frame.at[idx, "height"])
+        
+        #print (resized_x_ratio, resized_y_ratio)
+        
+        properties["x"] = (float)(properties["x"]) * resized_x_ratio
+        properties["y"] = (float)(properties["y"]) * resized_y_ratio
+        properties["w"] = (float)(properties["w"]) * resized_x_ratio
+        properties["h"] = (float)(properties["h"]) * resized_y_ratio       
+
         #properties = properties.astype(np.float64)
         #img = torch.from_numpy(img.transpose(2, 0, 1))
         #properties = self.data_frame.iloc[idx, 1:]
